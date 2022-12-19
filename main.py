@@ -4,12 +4,16 @@ import tensorflow as tf
 import splitfolders
 
 
+
 # code to download dataset from zip and split into train, val, test set
-original_dir = 'colon_image_sets'
+original_dir = 'all_images'
 new_dir = 'output'
 SEED = 10
+saved_model = False
+test_mode = True
+vis_filters = True
 
-if not os.path.isdir('train'):
+if not os.path.isdir(new_dir ):
     splitfolders.ratio(original_dir, output=new_dir, seed=SEED, ratio=(.8, 0.1, 0.1))
 
 
@@ -50,174 +54,208 @@ data_augmentation = tf.keras.Sequential([
   tf.keras.layers.RandomRotation(0.2),
 ])
 
-# code to setup pre-trained model
-
-#tf.keras.models.load_model('model')
-
 preprocess_input = tf.keras.applications.mobilenet_v2.preprocess_input
 
+# code to setup pre-trained model
 
-# Create the base model from the pre-trained model MobileNet V2
-IMG_SHAPE = IMG_SIZE + (3,)
-base_model = tf.keras.applications.MobileNetV2(input_shape=IMG_SHAPE,
-                                               include_top=False,
-                                               weights='imagenet')
+if saved_model:
+    model = tf.keras.models.load_model('model')
 
-image_batch, label_batch = next(iter(train_dataset))
-feature_batch = base_model(image_batch)
-print(feature_batch.shape)
+else:
+    # Create the base model from the pre-trained model MobileNet V2
+    IMG_SHAPE = IMG_SIZE + (3,)
+    base_model = tf.keras.applications.MobileNetV2(input_shape=IMG_SHAPE,
+                                                   include_top=False,
+                                                   weights='imagenet')
 
-base_model.trainable = False
+    image_batch, label_batch = next(iter(train_dataset))
+    feature_batch = base_model(image_batch)
+    print(feature_batch.shape)
 
-print(base_model.summary())
+    base_model.trainable = False
 
-global_average_layer = tf.keras.layers.GlobalAveragePooling2D()
-feature_batch_average = global_average_layer(feature_batch)
-print(feature_batch_average.shape)
+    print(base_model.summary())
 
-prediction_layer = tf.keras.layers.Dense(1)
-prediction_batch = prediction_layer(feature_batch_average)
-print(prediction_batch.shape)
+    global_average_layer = tf.keras.layers.GlobalAveragePooling2D()
+    feature_batch_average = global_average_layer(feature_batch)
+    print(feature_batch_average.shape)
 
-inputs = tf.keras.Input(shape=(160, 160, 3))
-x = data_augmentation(inputs)
-x = preprocess_input(x)
-x = base_model(x, training=False)
-x = global_average_layer(x)
-x = tf.keras.layers.Dropout(0.2)(x)
-outputs = prediction_layer(x)
-model = tf.keras.Model(inputs, outputs)
+    prediction_layer = tf.keras.layers.Dense(1)
+    prediction_batch = prediction_layer(feature_batch_average)
+    print(prediction_batch.shape)
 
-base_learning_rate = 0.0001
-model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=base_learning_rate),
-              loss=tf.keras.losses.BinaryCrossentropy(from_logits=True),
-              metrics=['accuracy'])
+    inputs = tf.keras.Input(shape=(160, 160, 3))
+    x = data_augmentation(inputs)
+    x = preprocess_input(x)
+    x = base_model(x, training=False)
+    x = global_average_layer(x)
+    x = tf.keras.layers.Dropout(0.2)(x)
+    outputs = prediction_layer(x)
+    model = tf.keras.Model(inputs, outputs)
 
-print(model.summary())
+    base_learning_rate = 0.0001
+    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=base_learning_rate),
+                  loss=tf.keras.losses.BinaryCrossentropy(from_logits=True),
+                  metrics=['accuracy'])
 
-print(len(model.trainable_variables))
+    print(model.summary())
 
-# code to train feature extraction model
+    print(len(model.trainable_variables))
 
-initial_epochs = 10
+    # code to train feature extraction model
 
-loss0, accuracy0 = model.evaluate(validation_dataset)
+    initial_epochs = 10
 
-print("initial loss: {:.2f}".format(loss0))
-print("initial accuracy: {:.2f}".format(accuracy0))
+    loss0, accuracy0 = model.evaluate(validation_dataset)
 
-callback = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=3)
+    print("initial loss: {:.2f}".format(loss0))
+    print("initial accuracy: {:.2f}".format(accuracy0))
 
-history = model.fit(train_dataset,
-                    epochs=initial_epochs,
-                    validation_data=validation_dataset,
-                    callbacks=callback)
+    callback = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=3)
 
-acc = history.history['accuracy']
-val_acc = history.history['val_accuracy']
+    history = model.fit(train_dataset,
+                        epochs=initial_epochs,
+                        validation_data=validation_dataset,
+                        callbacks=callback)
 
-loss = history.history['loss']
-val_loss = history.history['val_loss']
+    acc = history.history['accuracy']
+    val_acc = history.history['val_accuracy']
 
-# code shows historical training and validation performance
+    loss = history.history['loss']
+    val_loss = history.history['val_loss']
 
-plt.figure(figsize=(8, 8))
-plt.subplot(2, 1, 1)
-plt.plot(acc, label='Training Accuracy')
-plt.plot(val_acc, label='Validation Accuracy')
-plt.legend(loc='lower right')
-plt.ylabel('Accuracy')
-plt.ylim([min(plt.ylim()),1])
-plt.title('Training and Validation Accuracy')
+    # code shows historical training and validation performance
 
-plt.subplot(2, 1, 2)
-plt.plot(loss, label='Training Loss')
-plt.plot(val_loss, label='Validation Loss')
-plt.legend(loc='upper right')
-plt.ylabel('Cross Entropy')
-plt.ylim([0,1.0])
-plt.title('Training and Validation Loss')
-plt.xlabel('epoch')
-plt.savefig('feature_extracted.png')
+    plt.figure(figsize=(8, 8))
+    plt.subplot(2, 1, 1)
+    plt.plot(acc, label='Training Accuracy')
+    plt.plot(val_acc, label='Validation Accuracy')
+    plt.legend(loc='lower right')
+    plt.ylabel('Accuracy')
+    plt.ylim([min(plt.ylim()),1])
+    plt.title('Training and Validation Accuracy')
 
-# code for finetuning model
+    plt.subplot(2, 1, 2)
+    plt.plot(loss, label='Training Loss')
+    plt.plot(val_loss, label='Validation Loss')
+    plt.legend(loc='upper right')
+    plt.ylabel('Cross Entropy')
+    plt.ylim([0,1.0])
+    plt.title('Training and Validation Loss')
+    plt.xlabel('epoch')
+    plt.savefig('feature_extracted.png')
 
-base_model.trainable = True
+    # code for finetuning model
 
+    base_model.trainable = True
 
-# Let's take a look to see how many layers are in the base model
-print("Number of layers in the base model: ", len(base_model.layers))
+    if vis_filters:
+        # for loop to visualise filters
+        # taken from: https://towardsdatascience.com/convolutional-neural-network-feature-map-and-filter-visualization-f75012a5a49c
+        for layer in base_model.layers:
+            if 'conv' in layer.name:
+                weights, bias = layer.get_weights()
+                print(layer.name, filters.shape)
 
-# Fine-tune from this layer onwards
-fine_tune_at = 100
+                # normalize filter values between  0 and 1 for visualization
+                f_min, f_max = weights.min(), weights.max()
+                filters = (weights - f_min) / (f_max - f_min)
+                print(filters.shape[3])
+                filter_cnt = 1
 
-# Freeze all the layers before the `fine_tune_at` layer
-for layer in base_model.layers[:fine_tune_at]:
-  layer.trainable = False
+                # plotting all the filters
+                for i in range(filters.shape[3]):
+                    # get the filters
+                    filt = filters[:, :, :, i]
+                    # plotting each of the channel, color image RGB channels
+                    for j in range(filters.shape[0]):
+                        ax = plt.subplot(filters.shape[3], filters.shape[0], filter_cnt)
+                        ax.set_xticks([])
+                        ax.set_yticks([])
+                        plt.imshow(filt[:, :, j])
+                        filter_cnt += 1
 
-
-model.compile(loss=tf.keras.losses.BinaryCrossentropy(from_logits=True),
-              optimizer = tf.keras.optimizers.RMSprop(learning_rate=base_learning_rate/10),
-              metrics=['accuracy'])
-
-print(model.summary())
-
-len(model.trainable_variables)
-
-
-fine_tune_epochs = 10
-total_epochs =  initial_epochs + fine_tune_epochs
-
-history_fine = model.fit(train_dataset,
-                         epochs=total_epochs,
-                         initial_epoch=history.epoch[-1],
-                         validation_data=validation_dataset,
-                         callbacks=callback)
-
-# code shows historical training and validation performance
-
-acc += history_fine.history['accuracy']
-val_acc += history_fine.history['val_accuracy']
-
-loss += history_fine.history['loss']
-val_loss += history_fine.history['val_loss']
-
-plt.figure(figsize=(8, 8))
-plt.subplot(2, 1, 1)
-plt.plot(acc, label='Training Accuracy')
-plt.plot(val_acc, label='Validation Accuracy')
-plt.ylim([0.8, 1])
-plt.plot([initial_epochs-1,initial_epochs-1],
-          plt.ylim(), label='Start Fine Tuning')
-plt.legend(loc='lower right')
-plt.title('Training and Validation Accuracy')
-
-plt.subplot(2, 1, 2)
-plt.plot(loss, label='Training Loss')
-plt.plot(val_loss, label='Validation Loss')
-plt.ylim([0, 1.0])
-plt.plot([initial_epochs-1,initial_epochs-1],
-         plt.ylim(), label='Start Fine Tuning')
-plt.legend(loc='upper right')
-plt.title('Training and Validation Loss')
-plt.xlabel('epoch')
-plt.savefig('fine_tuned.png')
+                plt.savefig('filters_25000', layer.name, '.png')
 
 
-# finally we evaluate performance on the test dataset
-loss, accuracy = model.evaluate(test_dataset)
-print('Test accuracy :', accuracy)
+    # Let's take a look to see how many layers are in the base model
+    print("Number of layers in the base model: ", len(base_model.layers))
+
+    # Fine-tune from this layer onwards
+    fine_tune_at = 100
+
+    # Freeze all the layers before the `fine_tune_at` layer
+    for layer in base_model.layers[:fine_tune_at]:
+      layer.trainable = False
 
 
-# Retrieve a batch of images from the test set
-image_batch, label_batch = test_dataset.as_numpy_iterator().next()
-predictions = model.predict_on_batch(image_batch).flatten()
+    model.compile(loss=tf.keras.losses.BinaryCrossentropy(from_logits=True),
+                  optimizer = tf.keras.optimizers.RMSprop(learning_rate=base_learning_rate/10),
+                  metrics=['accuracy'])
 
-# Apply a sigmoid since our model returns logits
-predictions = tf.nn.sigmoid(predictions)
-predictions = tf.where(predictions < 0.5, 0, 1)
+    print(model.summary())
 
-print('Predictions:\n', predictions.numpy())
-print('Labels:\n', label_batch)
+    len(model.trainable_variables)
 
-model.save('model')
+
+    fine_tune_epochs = 10
+    total_epochs =  initial_epochs + fine_tune_epochs
+
+    history_fine = model.fit(train_dataset,
+                             epochs=total_epochs,
+                             initial_epoch=history.epoch[-1],
+                             validation_data=validation_dataset,
+                             callbacks=callback)
+
+    # code shows historical training and validation performance
+
+    acc += history_fine.history['accuracy']
+    val_acc += history_fine.history['val_accuracy']
+
+    loss += history_fine.history['loss']
+    val_loss += history_fine.history['val_loss']
+
+    plt.figure(figsize=(8, 8))
+    plt.subplot(2, 1, 1)
+    plt.plot(acc, label='Training Accuracy')
+    plt.plot(val_acc, label='Validation Accuracy')
+    plt.ylim([0.8, 1])
+    plt.plot([initial_epochs-1,initial_epochs-1],
+              plt.ylim(), label='Start Fine Tuning')
+    plt.legend(loc='lower right')
+    plt.title('Training and Validation Accuracy')
+
+    plt.subplot(2, 1, 2)
+    plt.plot(loss, label='Training Loss')
+    plt.plot(val_loss, label='Validation Loss')
+    plt.ylim([0, 1.0])
+    plt.plot([initial_epochs-1,initial_epochs-1],
+             plt.ylim(), label='Start Fine Tuning')
+    plt.legend(loc='upper right')
+    plt.title('Training and Validation Loss')
+    plt.xlabel('epoch')
+    plt.savefig('fine_tuned.png')
+
+    model.save('model')
+
+if test_mode:
+
+    # finally we evaluate performance on the test dataset
+    loss, accuracy = model.evaluate(test_dataset)
+    print('Test accuracy :', accuracy)
+
+
+    # Retrieve a batch of images from the test set
+    image_batch, label_batch = test_dataset.as_numpy_iterator().next()
+    predictions = model.predict_on_batch(image_batch).flatten()
+
+    # Apply a sigmoid since our model returns logits
+    predictions = tf.nn.sigmoid(predictions)
+    predictions = tf.where(predictions < 0.5, 0, 1)
+
+    print('Predictions:\n', predictions.numpy())
+    print('Labels:\n', label_batch)
+
+
+
+
