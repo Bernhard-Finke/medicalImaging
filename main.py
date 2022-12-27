@@ -2,18 +2,22 @@ import matplotlib.pyplot as plt
 import os
 import tensorflow as tf
 import splitfolders
+import numpy as np
 
+
+np.random.seed(2022)
+tf.random.set_seed(2022)
 
 
 # code to download dataset from zip and split into train, val, test set
 original_dir = 'all_images'
 new_dir = 'output'
 SEED = 10
-saved_model = False
+saved_model = True
 test_mode = True
-vis_filters = True
+regularize = False
 
-if not os.path.isdir(new_dir ):
+if not os.path.isdir(new_dir):
     splitfolders.ratio(original_dir, output=new_dir, seed=SEED, ratio=(.8, 0.1, 0.1))
 
 
@@ -40,6 +44,7 @@ test_dataset = tf.keras.utils.image_dataset_from_directory(test_dir,
                                                                  batch_size=BATCH_SIZE,
                                                                  image_size=IMG_SIZE)
 
+
 class_names = train_dataset.class_names
 print(class_names)
 
@@ -55,6 +60,8 @@ data_augmentation = tf.keras.Sequential([
 ])
 
 preprocess_input = tf.keras.applications.mobilenet_v2.preprocess_input
+#preprocess_input = tf.keras.applications.xception.preprocess_input
+#preprocess_input = tf.keras.applications.densenet.preprocess_input
 
 # code to setup pre-trained model
 
@@ -67,6 +74,13 @@ else:
     base_model = tf.keras.applications.MobileNetV2(input_shape=IMG_SHAPE,
                                                    include_top=False,
                                                    weights='imagenet')
+    #base_model = tf.keras.applications.Xception(input_shape=IMG_SHAPE,
+                                                #include_top=False,
+                                                #weights='imagenet')
+    #base_model = tf.keras.applications.DenseNet121(input_shape=IMG_SHAPE,
+                                                   #include_top=False,
+                                                   #weights='imagenet')
+
 
     image_batch, label_batch = next(iter(train_dataset))
     feature_batch = base_model(image_batch)
@@ -96,7 +110,7 @@ else:
     base_learning_rate = 0.0001
     model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=base_learning_rate),
                   loss=tf.keras.losses.BinaryCrossentropy(from_logits=True),
-                  metrics=['accuracy'])
+                  metrics=['accuracy', tf.keras.metrics.Precision(), tf.keras.metrics.Recall()])
 
     print(model.summary())
 
@@ -106,12 +120,12 @@ else:
 
     initial_epochs = 10
 
-    loss0, accuracy0 = model.evaluate(validation_dataset)
+    loss0, accuracy0, precision0, recall0 = model.evaluate(validation_dataset)
 
     print("initial loss: {:.2f}".format(loss0))
     print("initial accuracy: {:.2f}".format(accuracy0))
 
-    callback = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=3)
+    callback = tf.keras.callbacks.EarlyStopping(monitor='val_accuracy', patience=5, restore_best_weights=True)
 
     history = model.fit(train_dataset,
                         epochs=initial_epochs,
@@ -149,61 +163,44 @@ else:
 
     base_model.trainable = True
 
-    if vis_filters:
-        # for loop to visualise filters
-        # taken from: https://towardsdatascience.com/convolutional-neural-network-feature-map-and-filter-visualization-f75012a5a49c
-        for layer in base_model.layers:
-            if 'conv' in layer.name:
-                weights, bias = layer.get_weights()
-                print(layer.name, filters.shape)
-
-                # normalize filter values between  0 and 1 for visualization
-                f_min, f_max = weights.min(), weights.max()
-                filters = (weights - f_min) / (f_max - f_min)
-                print(filters.shape[3])
-                filter_cnt = 1
-
-                # plotting all the filters
-                for i in range(filters.shape[3]):
-                    # get the filters
-                    filt = filters[:, :, :, i]
-                    # plotting each of the channel, color image RGB channels
-                    for j in range(filters.shape[0]):
-                        ax = plt.subplot(filters.shape[3], filters.shape[0], filter_cnt)
-                        ax.set_xticks([])
-                        ax.set_yticks([])
-                        plt.imshow(filt[:, :, j])
-                        filter_cnt += 1
-
-                plt.savefig('filters_25000', layer.name, '.png')
-
 
     # Let's take a look to see how many layers are in the base model
     print("Number of layers in the base model: ", len(base_model.layers))
 
     # Fine-tune from this layer onwards
-    fine_tune_at = 100
+    fine_tune_at = len(base_model.layers)-50
 
     # Freeze all the layers before the `fine_tune_at` layer
     for layer in base_model.layers[:fine_tune_at]:
       layer.trainable = False
 
+    penalty = 0.01
+    regularizer = tf.keras.regularizers.l2(penalty)
+
+    if regularize:
+        for layer in base_model.layers[fine_tune_at:]:
+            for attr in ['kernel_regularizer']:
+                if hasattr(layer, attr):
+                    setattr(layer, attr, regularizer)
+
 
     model.compile(loss=tf.keras.losses.BinaryCrossentropy(from_logits=True),
                   optimizer = tf.keras.optimizers.RMSprop(learning_rate=base_learning_rate/10),
-                  metrics=['accuracy'])
+                  metrics=['accuracy', tf.keras.metrics.Precision(), tf.keras.metrics.Recall()])
 
     print(model.summary())
 
     len(model.trainable_variables)
 
 
-    fine_tune_epochs = 10
+    fine_tune_epochs = 11
     total_epochs =  initial_epochs + fine_tune_epochs
+
+    start_fine_tune = history.epoch[-1] + 1
 
     history_fine = model.fit(train_dataset,
                              epochs=total_epochs,
-                             initial_epoch=history.epoch[-1],
+                             initial_epoch=start_fine_tune,
                              validation_data=validation_dataset,
                              callbacks=callback)
 
@@ -229,7 +226,7 @@ else:
     plt.plot(loss, label='Training Loss')
     plt.plot(val_loss, label='Validation Loss')
     plt.ylim([0, 1.0])
-    plt.plot([initial_epochs-1,initial_epochs-1],
+    plt.plot([start_fine_tune-1,start_fine_tune-1],
              plt.ylim(), label='Start Fine Tuning')
     plt.legend(loc='upper right')
     plt.title('Training and Validation Loss')
@@ -238,23 +235,24 @@ else:
 
     model.save('model')
 
-if test_mode:
 
+
+if test_mode:
     # finally we evaluate performance on the test dataset
-    loss, accuracy = model.evaluate(test_dataset)
+    loss, accuracy, precision, recall = model.evaluate(test_dataset)
     print('Test accuracy :', accuracy)
 
 
-    # Retrieve a batch of images from the test set
-    image_batch, label_batch = test_dataset.as_numpy_iterator().next()
-    predictions = model.predict_on_batch(image_batch).flatten()
+    external_test_dataset = tf.keras.utils.image_dataset_from_directory('external_test',
+                                                               shuffle=True,
+                                                               batch_size=BATCH_SIZE,
+                                                               image_size=IMG_SIZE)
 
-    # Apply a sigmoid since our model returns logits
-    predictions = tf.nn.sigmoid(predictions)
-    predictions = tf.where(predictions < 0.5, 0, 1)
 
-    print('Predictions:\n', predictions.numpy())
-    print('Labels:\n', label_batch)
+    ext_loss, ext_accuracy, ext_precision, ext_recall = model.evaluate(external_test_dataset)
+    print('External test accuracy :', ext_accuracy)
+
+
 
 
 
